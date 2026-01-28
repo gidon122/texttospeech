@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Text-to-Speech Web App</title>
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-950 min-h-screen flex items-center justify-center">
+  <section class="w-[80%] h-[75vh] bg-gray-900 rounded-2xl shadow-xl p-6 md:p-8 flex flex-col gap-6">
+    <h1 class="text-2xl font-bold text-center text-blue-400 tracking-wide">Text-to-Speech</h1>
+    <label for="tts-text" class="font-medium text-gray-300">Enter text:</label>
+    <textarea id="tts-text" rows="10" class="rounded-xl border border-gray-700 p-3 w-full focus:outline-none focus:ring-2 focus:ring-blue-400 resize-y bg-gray-800 text-gray-100 placeholder-gray-500" placeholder="Type or paste your text here..."></textarea>
+    <div class="flex flex-col md:flex-row gap-4 items-center">
+      <div class="flex-1 w-full">
+        <label for="voice-select" class="block font-medium text-gray-300 mb-1">Voice:</label>
+        <select id="voice-select" class="rounded-xl border border-gray-700 p-2 w-full bg-gray-800 text-gray-100"></select>
+      </div>
+      <div class="flex-1 w-full">
+        <label for="rate-slider" class="block font-medium text-gray-300 mb-1">Speed: <span id="rate-value" class="font-semibold text-blue-400">1.0x</span></label>
+        <input id="rate-slider" type="range" min="0.5" max="2" step="0.01" value="1" class="w-full accent-blue-400">
+      </div>
+    </div>
+    <div class="flex gap-4 justify-center">
+      <button id="play-btn" class="rounded-xl bg-blue-500 hover:bg-blue-600 text-white font-semibold px-6 py-2 transition">Play</button>
+      <button id="pause-resume-btn" class="rounded-xl bg-yellow-500 hover:bg-yellow-600 text-white font-semibold px-6 py-2 transition" disabled>Pause</button>
+      <button id="download-btn" class="rounded-xl bg-green-500 hover:bg-green-600 text-white font-semibold px-6 py-2 transition" disabled>Download</button>
+    </div>
+    <div id="message" class="hidden text-center text-red-400 font-medium"></div>
+  </section>
+  <script>
+    // =====================
+    // Text-to-Speech Web App
+    // =====================
+    const textInput = document.getElementById('tts-text');
+    const playBtn = document.getElementById('play-btn');
+    const pauseResumeBtn = document.getElementById('pause-resume-btn');
+    const downloadBtn = document.getElementById('download-btn');
+    const voiceSelect = document.getElementById('voice-select');
+    const rateSlider = document.getElementById('rate-slider');
+    const rateValue = document.getElementById('rate-value');
+    const messageDiv = document.getElementById('message');
+
+    let voices = [];
+    let utterance = null;
+    let isPaused = false;
+    let audioChunks = [];
+    let mediaRecorder = null;
+    let audioBlob = null;
+
+    // Utility: Show message
+    function showMessage(msg) {
+      messageDiv.textContent = msg;
+      messageDiv.classList.remove('hidden');
+    }
+    function hideMessage() {
+      messageDiv.classList.add('hidden');
+      messageDiv.textContent = '';
+    }
+
+    // Load voices into dropdown
+    function loadVoices() {
+      voices = window.speechSynthesis.getVoices();
+      voiceSelect.innerHTML = '';
+      voices.forEach((voice, i) => {
+        const option = document.createElement('option');
+        option.value = i;
+        option.textContent = `${voice.name} (${voice.lang})${voice.default ? ' [default]' : ''}`;
+        voiceSelect.appendChild(option);
+      });
+    }
+    window.speechSynthesis.onvoiceschanged = loadVoices;
+    window.addEventListener('DOMContentLoaded', loadVoices);
+
+    // Update rate value display
+    rateSlider.addEventListener('input', () => {
+      rateValue.textContent = parseFloat(rateSlider.value).toFixed(2) + 'x';
+      // Only update rate for next utterance, not current playback
+    });
+
+    // Play button logic
+    playBtn.addEventListener('click', () => {
+      hideMessage();
+      if (!textInput.value.trim()) {
+        showMessage('Please enter some text.');
+        return;
+      }
+      if (window.speechSynthesis.speaking) {
+        window.speechSynthesis.cancel();
+      }
+      // Setup audio recording
+      audioChunks = [];
+      audioBlob = null;
+      downloadBtn.disabled = true;
+      // Create a new utterance
+      utterance = new SpeechSynthesisUtterance(textInput.value);
+      const selectedVoice = voices[voiceSelect.value];
+      if (selectedVoice) utterance.voice = selectedVoice;
+      utterance.rate = parseFloat(rateSlider.value);
+
+      // Use Web Audio API to record speech
+      const synth = window.speechSynthesis;
+      const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      const dest = audioCtx.createMediaStreamDestination();
+      const source = audioCtx.createOscillator();
+      source.connect(dest);
+      source.disconnect();
+      // Use the destination stream for MediaRecorder
+      mediaRecorder = new MediaRecorder(dest.stream);
+      mediaRecorder.ondataavailable = (e) => {
+        if (e.data.size > 0) audioChunks.push(e.data);
+      };
+      mediaRecorder.onstop = () => {
+        audioBlob = new Blob(audioChunks, { type: 'audio/wav' });
+        downloadBtn.disabled = false;
+      };
+      mediaRecorder.start();
+
+      utterance.onend = () => {
+        playBtn.disabled = false;
+        pauseResumeBtn.disabled = true;
+        pauseResumeBtn.textContent = 'Pause';
+        isPaused = false;
+        setTimeout(() => {
+          mediaRecorder.stop();
+        }, 100);
+      };
+      utterance.onerror = (e) => {
+        // Suppress 'interrupted' errors (which occur when speech is cancelled)
+        if (e.error !== 'interrupted') {
+          showMessage('Error: ' + (e.error || 'Unknown error'));
+        }
+        playBtn.disabled = false;
+        pauseResumeBtn.disabled = true;
+        if (mediaRecorder && mediaRecorder.state !== 'inactive') mediaRecorder.stop();
+      };
+      synth.speak(utterance);
+      playBtn.disabled = true;
+      pauseResumeBtn.disabled = false;
+      pauseResumeBtn.textContent = 'Pause';
+      isPaused = false;
+    });
+
+    // Pause/Resume button logic
+    pauseResumeBtn.addEventListener('click', () => {
+      if (!window.speechSynthesis.speaking) return;
+      if (isPaused) {
+        window.speechSynthesis.resume();
+        pauseResumeBtn.textContent = 'Pause';
+        isPaused = false;
+      } else {
+        window.speechSynthesis.pause();
+        pauseResumeBtn.textContent = 'Resume';
+        isPaused = true;
+      }
+    });
+
+    // Reset buttons if user edits text
+    textInput.addEventListener('input', () => {
+      if (window.speechSynthesis.speaking) {
+        window.speechSynthesis.cancel();
+        playBtn.disabled = false;
+        pauseResumeBtn.disabled = true;
+        pauseResumeBtn.textContent = 'Pause';
+        isPaused = false;
+      }
+      downloadBtn.disabled = true;
+      hideMessage();
+    });
+
+    // Download button logic
+    downloadBtn.addEventListener('click', () => {
+      if (!audioBlob) return;
+      const url = URL.createObjectURL(audioBlob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'tts-speech.wav';
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => {
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      }, 100);
+    });
+  </script>
+</body>
+</html>
